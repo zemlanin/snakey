@@ -3,6 +3,7 @@ initialSnake = [[19, 10], [20, 10], [21, 10], [22, 10], [23, 10], [24, 10], [25,
 sadFace = [[18,  8], [21,  8], [17, 12], [18, 11], [19, 11], [20, 11], [21, 11], [22, 12]]
 
 lg = (prefix='lg') -> console.log.bind console, prefix
+konami = Rx.Observable.from([UP, UP, DOWN, DOWN, LEFT, RIGHT, LEFT, RIGHT, B, A])
 
 moveSnake = (snake, direction) ->
     [init..., end] = snake
@@ -23,18 +24,23 @@ moveSnake = (snake, direction) ->
 keyboardStream = Rx.Observable.fromEvent document.body, 'keyup'
 
 showStream = keyboardStream
-    .map ({keyCode}) -> keyCode
-    .bufferWithCount(10, 1)
-    .filter((keyCodes) -> _.isEqual keyCodes, [UP, UP, DOWN, DOWN, LEFT, RIGHT, LEFT, RIGHT, B, A] )
+    .pluck('keyCode')
+    .windowWithCount(10, 1)
+    .filter((keyCodes) -> keyCodes.sequenceEqual konami)
+    .map(true)
 
 hideStream = keyboardStream.filter ({keyCode}) -> keyCode is ESC
 
 # debug
 showStream = keyboardStream.filter ({keyCode}) -> keyCode is B
 
-showStream = showStream.flatMap (v) -> Rx.Observable.of(v)
-    .concat(keyboardStream.filter ({keyCode}) -> keyCode is R)
-    .takeUntil hideStream
+showStream = showStream
+    .map((v) ->
+        Rx.Observable.of(v)
+            .concat(keyboardStream.filter ({keyCode}) -> keyCode is R)
+            .takeUntil hideStream
+    )
+    .switch()
 
 displayStream = Rx.Observable.merge(
         showStream.map(true)
@@ -49,18 +55,18 @@ canvasStream = showStream
         canvas.width = 400
         canvas.height = 200
         document.getElementById('wrapper').appendChild(canvas)
-    .map -> document.querySelector('#wrapper canvas')
+    .map(-> document.querySelector('#wrapper canvas'))
     .share()
 
 displayStream
-    .combineLatest canvasStream, _.identity
+    .combineLatest(canvasStream, _.identity)
     .subscribe (display) ->
         document.querySelector('#wrapper img').hidden = display
         document.querySelector('#wrapper canvas').hidden = not display
 
 fieldStream = new Rx.Subject()
 fieldStream
-    .combineLatest canvasStream, (field, canvas) -> {field, canvas}
+    .combineLatest(canvasStream, (field, canvas) -> {field, canvas})
     .subscribe ({field, canvas}) ->
         ctx = canvas.getContext "2d"
         ctx.clearRect(0, 0, canvas.width, canvas.height - 10)
@@ -71,7 +77,7 @@ fieldStream
 
 statusStream = new Rx.Subject()
 statusStream
-    .combineLatest canvasStream, (status, canvas) -> {status, canvas}
+    .combineLatest(canvasStream, (status, canvas) -> {status, canvas})
     .subscribe ({status, canvas}) ->
         ctx = canvas.getContext "2d"
         ctx.fillStyle = "#00A500"
@@ -83,23 +89,27 @@ statusStream
 pauseStream = new Rx.Subject()
 
 ticker = showStream
-    .flatMap ->
+    .select( ->
         Rx.Observable.just(-1)
-            .concat(Rx.Observable.interval(200))
-            .map (index) -> index+1
-            .takeUntil hideStream
-            .takeUntil pauseStream
+            .concat(Rx.Observable.interval(100))
+            .map((index) -> index+1)
+            .takeUntil(hideStream)
+            .takeUntil(pauseStream)
+    )
+    .switch()
 
 directionStream = keyboardStream
-    .map ({keyCode}) -> keyCode
-    .filter (keyCode) -> keyCode in [UP, DOWN, LEFT, RIGHT]
-    .scan DOWN, (prev, next) ->
+    .pluck('keyCode')
+    .filter((keyCode) -> keyCode in [UP, DOWN, LEFT, RIGHT])
+    .map((keyCode) -> {next: keyCode})
+    .merge(showStream.map({next: LEFT, reset: true}))
+    .scan(LEFT, (prev, {next, reset}) ->
         switch next
             when UP, DOWN
                 if prev in [LEFT, RIGHT] then next else prev
             when LEFT, RIGHT
-                if prev in [UP, DOWN] then next else prev
-    .merge showStream.map(DOWN)
+                if reset or prev in [UP, DOWN] then next else prev
+    )
 
 snakeStream = ticker
     .withLatestFrom(
@@ -122,5 +132,9 @@ snakeStream = ticker
     .subscribe fieldStream
 
 ticker
-    .subscribe (index) ->
-        statusStream.onNext index
+    .withLatestFrom(
+        directionStream
+        (index, direction) -> {index, direction}
+    )
+    .subscribe ({index, direction}) ->
+        statusStream.onNext "#{index} / #{direction}"
