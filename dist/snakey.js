@@ -18,6 +18,8 @@
 
   konami = Rx.Observable.from([UP, UP, DOWN, DOWN, LEFT, RIGHT, LEFT, RIGHT, B, A]);
 
+  keyboardStream = Rx.Observable.fromEvent(document.body, 'keyup');
+
   moveSnake = function(snake, direction) {
     var end, head, init, neckX, neckY, _i, _ref1;
     init = 2 <= snake.length ? __slice.call(snake, 0, _i = snake.length - 1) : (_i = 0, []), end = snake[_i++];
@@ -36,8 +38,6 @@
     })();
     return [head].concat(__slice.call(init));
   };
-
-  keyboardStream = Rx.Observable.fromEvent(document.body, 'keyup');
 
   showStream = keyboardStream.pluck('keyCode').windowWithCount(10, 1).filter(function(keyCodes) {
     return keyCodes.sequenceEqual(konami);
@@ -63,8 +63,6 @@
     })).takeUntil(hideStream);
   })["switch"]();
 
-  displayStream = Rx.Observable.merge(showStream.map(true), hideStream.map(false)).distinctUntilChanged();
-
   canvasStream = showStream.take(1).doAction(function() {
     var canvas;
     canvas = document.createElement('canvas');
@@ -75,7 +73,9 @@
     return document.querySelector('#wrapper canvas');
   }).share();
 
-  displayStream.combineLatest(canvasStream, _.identity).subscribe(function(display) {
+  displayStream = Rx.Observable.merge(showStream.map(true), hideStream.map(false)).distinctUntilChanged().combineLatest(canvasStream, _.identity);
+
+  displayStream.subscribe(function(display) {
     document.querySelector('#wrapper img').hidden = display;
     return document.querySelector('#wrapper canvas').hidden = !display;
   });
@@ -99,23 +99,6 @@
       _results.push(ctx.fillRect(10 * x, 10 * y, 10, 10));
     }
     return _results;
-  });
-
-  statusStream = new Rx.Subject();
-
-  statusStream.combineLatest(canvasStream, function(status, canvas) {
-    return {
-      status: status,
-      canvas: canvas
-    };
-  }).subscribe(function(_arg) {
-    var canvas, ctx, status;
-    status = _arg.status, canvas = _arg.canvas;
-    ctx = canvas.getContext("2d");
-    ctx.fillStyle = "#00A500";
-    ctx.fillRect(0, canvas.height - 10, canvas.width, 10);
-    ctx.fillStyle = "#FFFFFF";
-    return ctx.fillText(status, 5, canvas.height - 1);
   });
 
   pauseStream = new Rx.Subject();
@@ -179,17 +162,34 @@
       pauseStream.onNext(null);
       return sadFace;
     }
-  }).subscribe(fieldStream);
+  });
 
-  ticker.withLatestFrom(directionStream, function(index, direction) {
+  snakeStream.subscribe(fieldStream);
+
+  statusStream = ticker.withLatestFrom(directionStream, function(index, direction) {
     return {
       index: index,
       direction: direction
     };
-  }).subscribe(function(_arg) {
+  }).map(function(_arg) {
     var direction, index;
     index = _arg.index, direction = _arg.direction;
-    return statusStream.onNext("" + index + " / " + direction);
+    return "" + index + " / " + direction;
+  }).combineLatest(canvasStream, function(status, canvas) {
+    return {
+      status: status,
+      canvas: canvas
+    };
+  });
+
+  statusStream.subscribe(function(_arg) {
+    var canvas, ctx, status;
+    status = _arg.status, canvas = _arg.canvas;
+    ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#00A500";
+    ctx.fillRect(0, canvas.height - 10, canvas.width, 10);
+    ctx.fillStyle = "#FFFFFF";
+    return ctx.fillText(status, 5, canvas.height - 1);
   });
 
 }).call(this);

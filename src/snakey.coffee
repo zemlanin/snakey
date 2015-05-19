@@ -4,6 +4,7 @@ sadFace = [[18,  8], [21,  8], [17, 12], [18, 11], [19, 11], [20, 11], [21, 11],
 
 lg = (prefix='lg') -> console.log.bind console, prefix
 konami = Rx.Observable.from([UP, UP, DOWN, DOWN, LEFT, RIGHT, LEFT, RIGHT, B, A])
+keyboardStream = Rx.Observable.fromEvent document.body, 'keyup'
 
 moveSnake = (snake, direction) ->
     [init..., end] = snake
@@ -20,8 +21,6 @@ moveSnake = (snake, direction) ->
             [neckX+1, neckY]
 
     return [head, init...]
-
-keyboardStream = Rx.Observable.fromEvent document.body, 'keyup'
 
 showStream = keyboardStream
     .pluck('keyCode')
@@ -42,12 +41,6 @@ showStream = showStream
     )
     .switch()
 
-displayStream = Rx.Observable.merge(
-        showStream.map(true)
-        hideStream.map(false)
-    )
-    .distinctUntilChanged()
-
 canvasStream = showStream
     .take(1)
     .doAction ->
@@ -58,11 +51,16 @@ canvasStream = showStream
     .map(-> document.querySelector('#wrapper canvas'))
     .share()
 
-displayStream
+displayStream = Rx.Observable.merge(
+        showStream.map(true)
+        hideStream.map(false)
+    )
+    .distinctUntilChanged()
     .combineLatest(canvasStream, _.identity)
-    .subscribe (display) ->
-        document.querySelector('#wrapper img').hidden = display
-        document.querySelector('#wrapper canvas').hidden = not display
+
+displayStream.subscribe (display) ->
+    document.querySelector('#wrapper img').hidden = display
+    document.querySelector('#wrapper canvas').hidden = not display
 
 fieldStream = new Rx.Subject()
 fieldStream
@@ -75,21 +73,10 @@ fieldStream
             ctx.fillStyle = "#000000"
             ctx.fillRect(10*x, 10*y, 10, 10)
 
-statusStream = new Rx.Subject()
-statusStream
-    .combineLatest(canvasStream, (status, canvas) -> {status, canvas})
-    .subscribe ({status, canvas}) ->
-        ctx = canvas.getContext "2d"
-        ctx.fillStyle = "#00A500"
-        ctx.fillRect(0, canvas.height - 10, canvas.width, 10)
-
-        ctx.fillStyle = "#FFFFFF"
-        ctx.fillText(status, 5, canvas.height - 1)
-
 pauseStream = new Rx.Subject()
 
 ticker = showStream
-    .select( ->
+    .select(->
         Rx.Observable.just(-1)
             .concat(Rx.Observable.interval(100))
             .map((index) -> index+1)
@@ -112,10 +99,7 @@ directionStream = keyboardStream
     )
 
 snakeStream = ticker
-    .withLatestFrom(
-        directionStream
-        (index, direction) -> {index, direction}
-    )
+    .withLatestFrom(directionStream, (index, direction) -> {index, direction})
     .scan initialSnake, (prevSnake, {index, direction}) ->
         if index then moveSnake(prevSnake, direction) else initialSnake
     .map (snake) ->
@@ -125,16 +109,22 @@ snakeStream = ticker
             0 <= headY < 19 and
             not _.findWhere(_.tail(snake), snake[0])
         )
-            return snake
+            snake
         else
             pauseStream.onNext(null)
-            return sadFace
-    .subscribe fieldStream
+            sadFace
 
-ticker
-    .withLatestFrom(
-        directionStream
-        (index, direction) -> {index, direction}
-    )
-    .subscribe ({index, direction}) ->
-        statusStream.onNext "#{index} / #{direction}"
+snakeStream.subscribe fieldStream
+
+statusStream = ticker
+    .withLatestFrom(directionStream, (index, direction) -> {index, direction})
+    .map(({index, direction}) -> "#{index} / #{direction}")
+    .combineLatest(canvasStream, (status, canvas) -> {status, canvas})
+
+statusStream.subscribe ({status, canvas}) ->
+    ctx = canvas.getContext "2d"
+    ctx.fillStyle = "#00A500"
+    ctx.fillRect(0, canvas.height - 10, canvas.width, 10)
+
+    ctx.fillStyle = "#FFFFFF"
+    ctx.fillText(status, 5, canvas.height - 1)
